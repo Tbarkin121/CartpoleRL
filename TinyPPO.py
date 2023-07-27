@@ -18,17 +18,17 @@ from torchviz import make_dot
 import os
 os.environ["PATH"] += os.pathsep + 'C:\\Program Files\\Graphviz\\bin'
 
-num_envs = 2
-horizon = 5
-gamma = 0.9
+num_envs = 10000
+horizon = 20
+gamma = 0.99
 
-num_epochs = 1000
+num_epochs = 2500
 num_q_holds = 1
+# minibatch_steps = 1
+# minibatch_size = 1000
 
-minibatch_steps = 1
-minibatch_size = 1000
-take_n_actions = 1
-entropy_coff_inital = 1.0
+take_n_actions = 10
+entropy_coff_inital = 0.0
 clip_range = 0.2
             
 torch.set_default_device('cuda')
@@ -153,7 +153,7 @@ class PolicyNet(torch.nn.Module):
 # PolicyNet2.eval()
 
 mse_loss = torch.nn.MSELoss()
-env = CartPole(num_envs = num_envs, buf_horizon=horizon, gamma=gamma, rand_reset=False)
+env = CartPole(num_envs = num_envs, buf_horizon=horizon, gamma=gamma, rand_reset=True)
 log_probs = torch.zeros((num_envs, horizon))
 log_probs_old = torch.zeros((num_envs, horizon)).detach()
 env.render_init()
@@ -271,8 +271,8 @@ for epoch in range(num_epochs):
             # print('---')
             # print('s1')
             # print(s1)
-            print('a1')
-            print(a1)
+            # print('a1')
+            # print(a1)
             # print('r1')
             # print(r1)
             # print('s2')
@@ -288,7 +288,10 @@ for epoch in range(num_epochs):
         
         # [vals, probs] = PolicyNet1(s2)
         with torch.no_grad():
+            env.render_init()
             for _ in range(take_n_actions):
+                env.render(0)
+                
                 s1, a1, r1, s2, d2, log_probs_old, returns = env.buffer.get_SARS()
                 probs = Actor(s2)
                 newest_probs = probs[:,0,0].view(-1,1)
@@ -297,10 +300,8 @@ for epoch in range(num_epochs):
                 log_probs_sample = action_pd.log_prob(next_actions)
                 env.step(next_actions, log_probs_sample, Critic)
                 
-                if(d2[0,0]):
-                    env.render_init()
-                env.render(0)
-                # time.sleep(0.05)
+                
+                
                 
             
 
@@ -320,7 +321,7 @@ for epoch in range(num_epochs):
 #%%
 import time
 num_envs=2
-test_env = CartPole(num_envs = num_envs, buf_horizon=10, rand_reset=False)
+test_env = CartPole(num_envs = num_envs, buf_horizon=10, rand_reset=True)
 test_env.render_init()
 #%%
 env_ids = torch.arange(num_envs)
@@ -330,12 +331,9 @@ test_env.state[0,:] = 0
 test_env.state[0,2] = 10*torch.pi/180.0
 #%%
 
-view_len = 3000
+view_len = 5000
 env_view_id = 0
 for i in range(view_len):
-
-    # print(i)
-    
     test_env.render(env_view_id)
     s1, a1, r1, s2, d2, log_probs_old, returns = test_env.buffer.get_SARS() 
     
@@ -344,8 +342,8 @@ for i in range(view_len):
     action_pd = torch.distributions.Normal(newest_probs, 0.1*torch.ones_like(newest_probs))
     
     a = test_env.joy.get_axis()
-    # next_actions = action_pd.sample()
-    next_actions = probs[:,0,0].reshape(-1,1)
+    next_actions = probs[:,0,0].reshape(-1,1) + a[0]
+    
     log_probs = action_pd.log_prob(next_actions)
     
     test_env.step(next_actions, log_probs, Critic)
@@ -353,26 +351,5 @@ for i in range(view_len):
     print(next_actions[0,0])
     if(d2[0,0]):
         print('RESET')
-    # print(newest_probs)
 
-    
-
-# env_render.close()
-    
-# #%%
-
-# for name, param in PolicyNet2.named_parameters():
-#         print(name)
-#         print(param)
-
-# #%%
-# i = 0
-# while(1):
-#     i += 1
-#     a = torch.distributions.Categorical(probs=probs[-2,:]).sample()
-#     if(a != 0):
-#         print('WOW')
-#         print(i)
-#         print(a)
-#         break
    

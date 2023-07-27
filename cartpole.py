@@ -177,7 +177,7 @@ class CartPole():
 
         
         # Angle which fails the episode
-        self.theta_threshold_radians = 12 * 2 * torch.pi / 360
+        self.theta_threshold_radians = 25 * 2 * torch.pi / 360
         # Position which fails the episode
         self.x_threshold = 2.4
         
@@ -188,7 +188,7 @@ class CartPole():
         self.rand_omega_range = 1.0*deg2rad    #Starting Angular Vel in rad/s
         
 
-        self.rand_target_range = 4.0
+        self.rand_target_range = self.x_threshold-0.5
         
         
         # Scale the observation returned by get_SARS
@@ -240,10 +240,17 @@ class CartPole():
                     
             self.reward_angle = (1.0-torch.abs(self.theta))**2.0
             self.reward_dist =  1.0-((self.position - self.target)/(self.x_threshold))**2.0
-            self.reward = (self.reward_angle + self.reward_dist/5.0)/2.0
+            self.reward = (self.reward_angle + self.reward_dist)/2.0
+            self.reward = torch.where(self.done==1, -1.0, self.reward)
             
-            self.reward = torch.where(self.done==1, -1.0, 1.0)
             
+            self.reached_goal = ((self.position - self.target)**2 < 0.1) & (torch.abs(self.velocity) < 0.05)
+            env_ids = self.reached_goal.view(-1).nonzero(as_tuple=False).squeeze(-1)
+            if len(env_ids) > 0:
+                self.reset_goal(env_ids)
+                self.reward[env_ids] = 100.0
+                
+                
             vals = ValueNet(self.state*self.state_scaler)
             self.buffer.update2(self.reward, self.state*self.state_scaler, self.done, vals)
     
@@ -252,6 +259,9 @@ class CartPole():
     
             if len(env_ids) > 0:
                 self.reset_idx(env_ids)
+                
+            
+
                     
             
             
@@ -269,6 +279,9 @@ class CartPole():
             self.theta[env_ids, :] = torch.zeros( (len(env_ids), 1))
             self.omega[env_ids, :] = torch.zeros( (len(env_ids), 1))   
             self.target[env_ids, :] = torch.zeros( (len(env_ids), 1))   
+            
+    def reset_goal(self, env_ids):
+        self.target[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_target_range, self.rand_target_range)
         
     def render_init(self):
 
