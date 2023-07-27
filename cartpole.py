@@ -53,6 +53,15 @@ class Buffer():
         
         self.rewards_to_go = torch.zeros([self.num_envs, self.buf_hor,])
         self.value_gamma_scaler = torch.ones([self.num_envs, self.buf_hor,]) * self.gamma_mask[1:]
+        
+        self.log_probs = torch.zeros([self.num_envs, self.buf_hor,])
+        
+        self.value = torch.zeros([self.num_envs, self.buf_hor,])
+        self.advantage = torch.zeros([self.num_envs, self.buf_hor,])
+        self.returns = torch.zeros([self.num_envs, self.buf_hor,])
+        
+        self.gamma_vec = self.gamma**torch.linspace(0,self.buf_hor-1,self.buf_hor).reshape([1,self.buf_hor])
+        
 
     def fill(self):
         pass
@@ -60,7 +69,7 @@ class Buffer():
         #     actions = RandTensorRange([self.num_envs,], -1.0, 1.0)
         #     self.update(actions)
             
-    def update1(self, s1, a1):
+    def update1(self, s1, a1, lp):
         with torch.no_grad():
             self.s1 = self.s1.roll(1, 1)
             self.s1[:, 0, :] = s1
@@ -68,8 +77,11 @@ class Buffer():
             self.a = self.a.roll(1, 1)
             self.a[:, 0] = a1.view(-1)
             
+            self.log_probs = self.log_probs.roll(1, 1)
+            self.log_probs[:, 0] = lp.view(-1)
+
             
-    def update2(self, r2, s2, d2):
+    def update2(self, r2, s2, d2, val):
         with torch.no_grad():
             self.r = self.r.roll(1, 1)
             self.r[:, 0] = r2.view(-1)
@@ -77,14 +89,30 @@ class Buffer():
             self.s2[:, 0, :] = s2
             self.d = self.d.roll(1, 1)
             self.d[:, 0] = d2.view(-1)
+            self.value = self.value.roll(1, 1)
+            self.value[:, 0] = val.view(-1)
             
             
+            self.active_mask = torch.cumsum(self.d, dim=1)==0
+            self.active_mask1 = self.active_mask.detach().clone()
+            self.active_mask1[:,0] = 1
+            
+            self.returns = self.returns.roll(dims=1, shifts=1)
+            self.returns[:,0] = self.value[:,1]
+            
+            self.returns += (self.active_mask1*(self.r[:,0].view(-1,1) - 
+                             self.value[:,1].view(-1,1)) + 
+                             self.gamma*self.active_mask*self.value[:,0].view(-1,1))*self.gamma_vec
+            
+            # print('Returns 2 : ')
+            # print(self.returns)
             
             dones_tmp = self.d.clone()
             dones_tmp[:,0] = False
             
             dones_mask = torch.where(dones_tmp, 0, 1)
             dones_mask = torch.cumprod(dones_mask, dim=1)
+            
             
             self.rewards_to_go = self.rewards_to_go.roll(1, 1)
             self.rewards_to_go[:, 0] = 0
@@ -97,7 +125,7 @@ class Buffer():
         
     def get_SARS(self):
        # return self.s1, self.a, self.r, self.s2, self.d 
-       return self.s1, self.a, self.rewards_to_go, self.s2, self.d 
+       return self.s1, self.a, self.rewards_to_go, self.s2, self.d, self.log_probs, self.returns
    
     def get_SARS_minibatch(self, num_samples):
         env_ids = torch.randint(low=0, high=self.num_envs, size=(num_samples,))
@@ -106,7 +134,7 @@ class Buffer():
     
     
 class CartPole():
-    def __init__(self, num_envs=2, buf_horizon=10, gamma=0.9):
+    def __init__(self, num_envs=2, buf_horizon=10, gamma=0.9, rand_reset=False):
         self.dt = 0.01
         self.gravity = 9.81
         self.num_envs = num_envs
@@ -115,6 +143,7 @@ class CartPole():
         self.num_actions = 1
         self.num_states = 5
         self.buffer = Buffer(self.buffer_hor, self.num_envs, self.num_actions, self.num_states, gamma)
+        self.rand_reset = rand_reset
         
         # ele 0 : Position
         # ele 1 : Velocity
@@ -153,14 +182,11 @@ class CartPole():
         self.x_threshold = 2.4
         
         deg2rad = torch.pi/180.0
-        # self.rand_pos_range = 5.0               #Starting Position Max in m
-        # self.rand_vel_range = 2.0               #Starting Velocity Max in m/s
-        # self.rand_theta_range = 10.0*deg2rad    #Starting Angle Max in radians
-        # self.rand_omega_range = 2.0*deg2rad    #Starting Angular Vel in rad/s
-        self.rand_pos_range = 0.0               #Starting Position Max in m
-        self.rand_vel_range = 0.0               #Starting Velocity Max in m/s
-        self.rand_theta_range = 0.0*deg2rad    #Starting Angle Max in radians
-        self.rand_omega_range = 0.0*deg2rad    #Starting Angular Vel in rad/s
+        self.rand_pos_range = 1.0               #Starting Position Max in m
+        self.rand_vel_range = 1.0               #Starting Velocity Max in m/s
+        self.rand_theta_range = 5.0*deg2rad    #Starting Angle Max in radians
+        self.rand_omega_range = 1.0*deg2rad    #Starting Angular Vel in rad/s
+        
 
         self.rand_target_range = 4.0
         
@@ -176,9 +202,10 @@ class CartPole():
         self.joy = Joystick()
         # self.render_init()
         
-    def step(self, actions):
+    def step(self, actions, log_probs, ValueNet):
         with torch.no_grad():
-
+            
+                
             force = self.force_scale * actions
             
             self.costheta = torch.cos(self.theta)
@@ -193,7 +220,7 @@ class CartPole():
             # print(alpha)
             
             
-            self.buffer.update1(self.state*self.state_scaler, actions)
+            self.buffer.update1(self.state*self.state_scaler, actions, log_probs)
             
             if self.kinematics_integrator == 'euler':
                 dxdt = torch.cat( (self.velocity.view((-1,1)), accel, self.omega.view((-1,1)), alpha, torch.zeros_like(alpha)), dim=1)
@@ -217,7 +244,8 @@ class CartPole():
             
             self.reward = torch.where(self.done==1, -1.0, 1.0)
             
-            self.buffer.update2(self.reward, self.state*self.state_scaler, self.done)
+            vals = ValueNet(self.state*self.state_scaler)
+            self.buffer.update2(self.reward, self.state*self.state_scaler, self.done, vals)
     
             
             env_ids = self.done.view(-1).nonzero(as_tuple=False).squeeze(-1)
@@ -228,12 +256,19 @@ class CartPole():
             
             
     def reset_idx(self, env_ids):
-        self.position[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_pos_range, self.rand_pos_range)
-        self.velocity[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_vel_range, self.rand_vel_range)
-        self.theta[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_theta_range, self.rand_theta_range)
-        self.omega[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_omega_range, self.rand_omega_range)   
-        self.target[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_target_range, self.rand_target_range)   
-    
+        
+        if(self.rand_reset):
+            self.position[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_pos_range, self.rand_pos_range)
+            self.velocity[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_vel_range, self.rand_vel_range)
+            self.theta[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_theta_range, self.rand_theta_range)
+            self.omega[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_omega_range, self.rand_omega_range)   
+            self.target[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_target_range, self.rand_target_range)   
+        else:
+            self.position[env_ids, :] = torch.zeros( (len(env_ids), 1))
+            self.velocity[env_ids, :] = torch.zeros( (len(env_ids), 1))
+            self.theta[env_ids, :] = torch.zeros( (len(env_ids), 1))
+            self.omega[env_ids, :] = torch.zeros( (len(env_ids), 1))   
+            self.target[env_ids, :] = torch.zeros( (len(env_ids), 1))   
         
     def render_init(self):
 
@@ -315,9 +350,37 @@ class CartPole():
 
             
             
+
+
 # #%%
-# cp = CartPole(num_envs = 1, buf_horizon=10, gamma=0.9)
+# cp = CartPole(num_envs = 2, buf_horizon=6, gamma=0.9, rand_reset=True)
 # cp.render_init()
+
+# import torch.nn as nn
+# class ValueNet(torch.nn.Module):
+#     def __init__(self):
+#         super().__init__()
+#         # define actor and critic networks
+        
+#         n_features = 5
+#         n_actions = 1
+        
+#         layers = [nn.Linear(n_features, 128),
+#                   nn.LeakyReLU(),
+#                   nn.Linear(128, 128),  
+#                   nn.LeakyReLU(),
+#                   nn.Linear(128, 64),  
+#                   nn.LeakyReLU(),
+#                   nn.Linear(64, n_actions),  
+#                  ]
+#         self.layers = nn.Sequential(*layers)
+
+
+#     def forward(self, x):
+#         values = self.layers(x)  # shape: [n_envs,]
+#         return (values)
+
+# critic = ValueNet()
 # #%%
 
 # pos_log = []
@@ -333,9 +396,10 @@ class CartPole():
 # cp.theta[...] = 0*torch.pi/180.0
 # cp.omega[...] = 0
 
-# #%%
 # cp.theta[...] = 1*torch.pi/180.0
-# for _ in range(125):
+# #%%
+
+# for _ in range(1):
     
 #     start_time = time.time()
 #     pos_log.append(cp.state[env_2_watch, 0].detach().cpu().numpy())
@@ -347,29 +411,31 @@ class CartPole():
 #     cp.render(env_2_watch)
 #     a = cp.joy.get_axis()
 #     # actions = torch.ones((cp.num_envs,1))*a[0]
-#     actions = torch.zeros((cp.num_envs, 1))
-#     cp.step(actions)
+#     actions = torch.ones((cp.num_envs, 1))*0.5
+#     log_probs = torch.ones((cp.num_envs, 1))
+#     cp.step(actions, log_probs, critic)
 #     reward_log.append(cp.reward[env_2_watch].detach().cpu().numpy())
-#     print(cp.reward[0,...])
+#     # print(cp.reward[0,...])
 #     elapsed_time = time.time() - start_time
 #     # print('Elapsed Time : {}'.format(elapsed_time))
 #     # print('FPS : {}'.format(cp.num_envs/elapsed_time))
 
     
-#     [s1,a1,r1,s2,d] = cp.buffer.get_SARS()
-#     print('s1')
-#     print(s1)
-#     print('s2')
-#     print(s2)
-#     print('a1')
-#     print(a1)
-#     print('r')
-#     print(r1)
+#     [s1,a1,r1,s2,d, log_probs_old] = cp.buffer.get_SARS()
+#     # print('s1')
+#     # print(s1)
+#     # print('s2')
+#     # print(s2)
+#     # print('a1')
+#     # print(a1)
+#     # print('r')
+#     # print(r1)
 #     print('d')
 #     print(d)
-#     print('advantage')
-#     print(cp.buffer.rewards_to_go)
+#     # print('advantage')
+#     # print(cp.buffer.rewards_to_go)
 
+#     cp.render(0)
     
 
 # # plt.figure(figsize=(9, 3))
@@ -392,7 +458,7 @@ class CartPole():
 
 # #%%
 
-# [s1,a1,r1,s2,d] = cp.buffer.get_SARS()
+# [s1,a1,r1,s2,d, lp_old] = cp.buffer.get_SARS()
 # print('s1')
 # print(s1)
 # print('s2')
@@ -419,3 +485,11 @@ class CartPole():
 # # print(r1)
 # # print('d')
 # # print(d)
+
+# #%%
+
+# dones_tmp = cp.buffer.d.clone()
+# dones_tmp[:,0] = False
+# dones_mask = torch.where(dones_tmp, 0, 1)
+# dones_mask = torch.cumprod(dones_mask, dim=1)
+# print(dones_mask)
