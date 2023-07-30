@@ -104,23 +104,24 @@ class Buffer():
                              self.value[:,1].view(-1,1)) + 
                              self.gamma*self.active_mask*self.value[:,0].view(-1,1))*self.gamma_vec
             
-            # print('Returns 2 : ')
-            # print(self.returns)
             
-            dones_tmp = self.d.clone()
-            dones_tmp[:,0] = False
+            # dones_tmp = self.d.clone()
+            # dones_tmp[:,0] = False
             
-            dones_mask = torch.where(dones_tmp, 0, 1)
-            dones_mask = torch.cumprod(dones_mask, dim=1)
+            # dones_mask = torch.where(dones_tmp, 0, 1)
+            # dones_mask = torch.cumprod(dones_mask, dim=1)
             
             
-            self.rewards_to_go = self.rewards_to_go.roll(1, 1)
-            self.rewards_to_go[:, 0] = 0
-            self.rewards_to_go += dones_mask*self.gamma_mask[0:self.buf_hor]*r2
+            # self.rewards_to_go = self.rewards_to_go.roll(1, 1)
+            # self.rewards_to_go[:, 0] = 0
+            # self.rewards_to_go += dones_mask*self.gamma_mask[0:self.buf_hor]*r2
             
-            dones_mask2 = torch.where(self.d, 0, 1)
-            dones_mask2 = torch.cumprod(dones_mask2, dim=1)
-            self.value_gamma_scaler = dones_mask2*self.gamma_mask[1:]
+            # dones_mask2 = torch.where(self.d, 0, 1)
+            # dones_mask2 = torch.cumprod(dones_mask2, dim=1)
+            # self.value_gamma_scaler = dones_mask2*self.gamma_mask[1:]
+            
+            # # returns = env.buffer.value_gamma_scaler*vals_s2[:,0] + r1
+
             
         
     def get_SARS(self):
@@ -177,7 +178,7 @@ class CartPole():
 
         
         # Angle which fails the episode
-        self.theta_threshold_radians = 25 * 2 * torch.pi / 360
+        self.theta_threshold_radians = 60 * 2 * torch.pi / 360
         # Position which fails the episode
         self.x_threshold = 2.4
         
@@ -241,17 +242,17 @@ class CartPole():
             self.reward_angle = (1.0-torch.abs(self.theta))**2.0
             self.reward_dist =  1.0-((self.position - self.target)/(self.x_threshold))**2.0
             self.reward = (self.reward_angle + self.reward_dist)/2.0
-            self.reward = torch.where(self.done==1, -1.0, self.reward)
+            self.reward = torch.where(self.done==1, -1.0, 1.0-torch.abs(actions))
             
             
-            self.reached_goal = ((self.position - self.target)**2 < 0.1) & (torch.abs(self.velocity) < 0.05)
+            self.reached_goal = ((self.position - self.target)**2 < 0.075) & (torch.abs(self.velocity) < 0.1)
             env_ids = self.reached_goal.view(-1).nonzero(as_tuple=False).squeeze(-1)
             if len(env_ids) > 0:
                 self.reset_goal(env_ids)
                 self.reward[env_ids] = 100.0
                 
                 
-            vals = ValueNet(self.state*self.state_scaler)
+            [vals, probs] = ValueNet(self.state*self.state_scaler)
             self.buffer.update2(self.reward, self.state*self.state_scaler, self.done, vals)
     
             
