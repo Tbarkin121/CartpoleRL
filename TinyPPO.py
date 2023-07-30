@@ -19,7 +19,7 @@ import os
 os.environ["PATH"] += os.pathsep + 'C:\\Program Files\\Graphviz\\bin'
 
 num_envs = 5000
-horizon = 20
+horizon = 40
 gamma = 0.99
 
 num_epochs = 10000
@@ -46,32 +46,32 @@ class Policy(torch.nn.Module):
         layer2_count = 128
 
         
-        # self.shared1 = nn.Sequential(
-        #                             nn.Linear(n_features, layer1_count),
-        #                             nn.ELU()
-        #                             )
+        self.shared1 = nn.Sequential(
+                                    nn.Linear(n_features, layer1_count),
+                                    nn.ELU()
+                                    )
         
         # self.shared2 = nn.Sequential(
         #                             nn.Linear(layer1_count+n_features, layer2_count),
         #                             nn.ELU()
         #                             )
         
-        # self.policy1 = nn.Sequential(
-        #                             nn.Linear(layer1_count+n_features, layer2_count),
-        #                             nn.ELU()
-        #                             )
-        # self.policy2 = nn.Sequential(
-        #                             nn.Linear(layer2_count+n_features, n_actions),
-        #                             nn.Tanh(),
-        #                             )
+        self.policy1 = nn.Sequential(
+                                    nn.Linear(layer1_count+n_features, layer2_count),
+                                    nn.ELU()
+                                    )
+        self.policy2 = nn.Sequential(
+                                    nn.Linear(layer2_count+n_features, n_actions),
+                                    nn.Tanh(),
+                                    )
         
-        # self.value1 = nn.Sequential(
-        #                             nn.Linear(layer1_count+n_features, layer2_count),
-        #                             nn.ELU()
-        #                             )
-        # self.value2 = nn.Sequential(
-        #                             nn.Linear(layer2_count+n_features, 1),
-        #                             )
+        self.value1 = nn.Sequential(
+                                    nn.Linear(layer1_count+n_features, layer2_count),
+                                    nn.ELU()
+                                    )
+        self.value2 = nn.Sequential(
+                                    nn.Linear(layer2_count+n_features, 1),
+                                    )
         
         self.policy = nn.Sequential(
                                     nn.Linear(n_features, layer1_count),
@@ -90,15 +90,15 @@ class Policy(torch.nn.Module):
                                     )
 
     def forward(self, x):
-        # s1 = torch.cat((self.shared1(x), x), dim=-1)
-        # # s2 = torch.cat((self.shared2(s1), x), dim=-1)
-        # v1 = torch.cat((self.value1(s1) , x), dim=-1)
-        # v2 = self.value2(v1) 
-        # p1 = torch.cat((self.policy1(s1), x), dim=-1)
-        # p2 = self.policy2(p1)        
-        p = self.policy(x)
-        v = self.value(x)
-        return v, p
+        s1 = torch.cat((self.shared1(x), x), dim=-1)
+        # s2 = torch.cat((self.shared2(s1), x), dim=-1)
+        v1 = torch.cat((self.value1(s1) , x), dim=-1)
+        v2 = self.value2(v1) 
+        p1 = torch.cat((self.policy1(s1), x), dim=-1)
+        p2 = self.policy2(p1)        
+        # p = self.policy(x)
+        # v = self.value(x)
+        return v2, p2
     
     
 #%%
@@ -236,11 +236,11 @@ for epoch in range(num_epochs):
         # Useful extra info
         approx_kl1 = ((torch.exp(ratio) - 1) - ratio).mean() #Stable Baselines 3
         approx_kl2 = (log_probs_old - log_probs).mean()    #Open AI Spinup
-        # print('kl approx : {} : {} : {}'.format(approx_kl1, approx_kl2, ratio.mean()))
+        # print('kl approx : {} : {} : {}'.formaWDt(approx_kl1, approx_kl2, ratio.mean()))
     
     # print(Qvals.reshape([siz,siz]))
     
-torch.save(Agent.state_dict(), "Agent_Save.pth")
+torch.save(Agent.state_dict(), "D2RL_Save.pth")
 
 
 #%%
@@ -248,7 +248,7 @@ import time
 num_envs=2
 test_env = CartPole(num_envs = num_envs, buf_horizon=10, rand_reset=True)
 test_env.render_init()
-Agent.load_state_dict(torch.load("Agent_Save.pth"))
+Agent.load_state_dict(torch.load("D2RL_Save.pth"))
 #%%
 env_ids = torch.arange(num_envs)
 test_env.reset_idx(env_ids)
@@ -274,6 +274,7 @@ for i in range(view_len):
     log_probs = action_pd.log_prob(next_actions)
     
     test_env.step(next_actions, log_probs, Agent)
+    print(test_env.reward[0])
     
     # print(next_actions[0,0])
     # if(d2[0,0]):

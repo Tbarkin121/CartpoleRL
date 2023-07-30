@@ -174,7 +174,7 @@ class CartPole():
         
         self.total_mass = self.cart_mass + self.pole_mass
 
-        self.force_scale = 10   #Scales actions from [-1, 1] -> [-fs, fs]
+        self.force_scale = 25   #Scales actions from [-1, 1] -> [-fs, fs]
 
         
         # Angle which fails the episode
