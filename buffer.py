@@ -72,7 +72,6 @@ class Buffer():
             self.s2[:, 0, :] = s2
             self.d = self.d.roll(1, 1)
             self.d[:, 0] = d2.view(-1)
-            
             self.value = self.value.roll(1, 1)
             self.value[:, 0] = val.view(-1)
             

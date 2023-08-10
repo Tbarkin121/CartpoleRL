@@ -164,9 +164,6 @@ class CartPole_4P():
             
             [vals, probs] = ValueNet(buf_states2)
             
-            print('wut')
-            print(buf_states2.shape)
-            print(vals.shape)
             self.buffer.update2(self.reward_summed, buf_states2, self.done_summed, vals)
     
             
@@ -255,7 +252,6 @@ class CartPole_4P():
 
         new_cart = self.cart_image
         cart_rect = new_cart.get_rect()
-        print(position.shape)
 
         cart_rect.center = (position + self.screen_center[0], self.screen_center[1])
         self.window.blit(new_cart, cart_rect)

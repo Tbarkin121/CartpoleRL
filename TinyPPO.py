@@ -21,7 +21,7 @@ import os
 os.environ["PATH"] += os.pathsep + 'C:\\Program Files\\Graphviz\\bin'
 
 num_envs = 5000
-horizon = 40
+horizon = 25
 gamma = 0.99
 
 num_epochs = 10000
@@ -58,11 +58,6 @@ class Policy(torch.nn.Module):
                                     nn.Linear(layer1_count+n_features, layer2_count),
                                     nn.ELU()
                                     )
-        
-        # self.shared2 = nn.Sequential(
-        #                             nn.Linear(layer1_count+n_features, layer2_count),
-        #                             nn.ELU()
-        #                             )
         
         self.policy1 = nn.Sequential(
                                     nn.Linear(layer2_count+n_features, layer3_count),
@@ -108,6 +103,7 @@ class Policy(torch.nn.Module):
         # v = self.value(x)
         return v2, p2
     
+
     
 #%%
 # a = torch.rand([3,5])
@@ -126,7 +122,7 @@ agent_optim = optim.Adam(Agent.parameters(), lr=3e-4)
 mse_loss = torch.nn.MSELoss()
 # env = CartPole(num_envs = num_envs, buf_horizon=horizon, gamma=gamma, rand_reset=True)
 env = CartPole_4P(num_envs = num_envs, buf_horizon=horizon, gamma=gamma, rand_reset=True)
-replay_buffer = Buffer(env.buffer_hor, num_envs, env.num_actions, env.num_states, gamma)
+replay_buffer = Buffer(env.buffer_hor, num_envs, env.num_actions, env.num_states*env.num_players, gamma)
 env.register_buffer(replay_buffer)
 
 
@@ -151,12 +147,12 @@ for epoch in range(num_epochs):
         # s1, a1, r1, s2, d2, log_probs_old, returns = env.buffer.get_SARS_minibatch(minibatch_size) 
         s1, a1, r1, s2, d2, log_probs_old, returns = replay_buffer.get_SARS()
 
-    
+        
         [vals_s1, probs_s1] = Agent(s1)
         
         
         # action_pd_s1 = torch.distributions.Normal(probs_s1[:,:,0], probs_s1[:,:,1])
-        action_pd_s1 = torch.distributions.Normal(probs_s1[:,:,0], 0.1*torch.ones_like(probs_s1[:,:,0].detach()))
+        action_pd_s1 = torch.distributions.Normal(probs_s1, 0.1*torch.ones_like(probs_s1.detach()))
         
 
         # td_error = returns - vals_s1.squeeze(-1)
@@ -175,8 +171,8 @@ for epoch in range(num_epochs):
         # entropy_loss = -action_pd_s1.entropy().mean() * entropy_coff
         entropy_loss = -entropy_coff*torch.mean(-log_probs)
 
-        policy_loss_1 = advantage.detach() * ratio
-        policy_loss_2 = advantage.detach() * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
+        policy_loss_1 = advantage.view(env.num_envs, env.buffer_hor, 1).detach() * ratio
+        policy_loss_2 = advantage.view(env.num_envs, env.buffer_hor, 1).detach() * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
         policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean() 
         
         value_loss = mse_loss(vals_s1.squeeze(-1), returns)
@@ -228,7 +224,7 @@ for epoch in range(num_epochs):
             
             s1, a1, r1, s2, d2, log_probs_old, returns = replay_buffer.get_SARS()
             [vals, probs] = Agent(s2)
-            newest_probs = probs[:,0,0].view(-1,1)
+            newest_probs = probs[:,0,:]
             action_pd = torch.distributions.Normal(newest_probs, 0.1*torch.ones_like(newest_probs))
             next_actions = action_pd.sample()
             log_probs_sample = action_pd.log_prob(next_actions)
@@ -253,7 +249,11 @@ torch.save(Agent.state_dict(), "model_name.pth")
 #%%
 import time
 num_envs=2
-test_env = CartPole(num_envs = num_envs, buf_horizon=10, rand_reset=True)
+test_env = CartPole_4P(num_envs = num_envs, buf_horizon=10, gamma=gamma, rand_reset=True)
+test_replay_buffer = Buffer(test_env.buffer_hor, num_envs, test_env.num_actions, test_env.num_states*test_env.num_players, gamma)
+test_env.register_buffer(test_replay_buffer)
+
+
 test_env.render_init()
 Agent.load_state_dict(torch.load("model_name.pth"))
 #%%
@@ -269,15 +269,16 @@ env_view_id = 0
 for i in range(view_len):
     start_time = time.perf_counter()
     test_env.render(env_view_id)
-    s1, a1, r1, s2, d2, log_probs_old, returns = replay_buffer.get_SARS() 
+    s1, a1, r1, s2, d2, log_probs_old, returns = test_replay_buffer.get_SARS() 
+    
     
     # probs = Actor(s2)
     [vals, probs] = Agent(s2)
-    newest_probs = probs[:,0,0].view(-1,1)
+    newest_probs = probs[:,0,:]
     action_pd = torch.distributions.Normal(newest_probs, 0.1*torch.ones_like(newest_probs))
     
     a = test_env.joy.get_axis()
-    next_actions = probs[:,0,0].reshape(-1,1) + a[0]
+    next_actions = probs[:,0,:] + a[0]
     
     log_probs = action_pd.log_prob(next_actions)
     
@@ -354,4 +355,16 @@ mean_time = time_accum.mean()
 print("Average Loop Time : {}s. ".format(mean_time))
 print("Average Loop Freq : {}Hz. ".format(1/mean_time))
 
+#%%
+import matplotlib.pyplot as plt
 
+data = Agent.shared1[0].weight.sort(dim=1)[0].cpu().detach().numpy()
+# plt.plot(data)
+# plt.show()
+# for name, param in Agent.named_parameters():
+#     if( torch.any(torch.isnan(param)) ):
+#         print(name)
+#         print(param)
+#         BREAKPOINTBULLSHIT
+        
+        
