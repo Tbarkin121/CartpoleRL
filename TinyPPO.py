@@ -12,6 +12,8 @@ import torch.nn as nn
 import numpy as np
 from torch import optim
 from cartpole import CartPole
+from cartpole_fourplayer import CartPole_4P
+from buffer import Buffer
 import time
 
 from torchviz import make_dot
@@ -40,14 +42,20 @@ class Policy(torch.nn.Module):
         super().__init__()
         # define actor and critic networks
         
-        n_features = 5
-        n_actions = 1
-        layer1_count = 128
+        n_features = 20
+        n_actions = 4
+        layer1_count = 256
         layer2_count = 128
+        layer3_count = 64
 
         
         self.shared1 = nn.Sequential(
                                     nn.Linear(n_features, layer1_count),
+                                    nn.ELU()
+                                    )
+        
+        self.shared2 = nn.Sequential(
+                                    nn.Linear(layer1_count+n_features, layer2_count),
                                     nn.ELU()
                                     )
         
@@ -57,44 +65,44 @@ class Policy(torch.nn.Module):
         #                             )
         
         self.policy1 = nn.Sequential(
-                                    nn.Linear(layer1_count+n_features, layer2_count),
+                                    nn.Linear(layer2_count+n_features, layer3_count),
                                     nn.ELU()
                                     )
         self.policy2 = nn.Sequential(
-                                    nn.Linear(layer2_count+n_features, n_actions),
+                                    nn.Linear(layer3_count+n_features, n_actions),
                                     nn.Tanh(),
                                     )
         
         self.value1 = nn.Sequential(
-                                    nn.Linear(layer1_count+n_features, layer2_count),
+                                    nn.Linear(layer2_count+n_features, layer3_count),
                                     nn.ELU()
                                     )
         self.value2 = nn.Sequential(
-                                    nn.Linear(layer2_count+n_features, 1),
+                                    nn.Linear(layer3_count+n_features, 1),
                                     )
         
-        self.policy = nn.Sequential(
-                                    nn.Linear(n_features, layer1_count),
-                                    nn.ELU(),
-                                    nn.Linear(layer1_count, layer2_count),
-                                    nn.ELU(),
-                                    nn.Linear(layer2_count, n_actions),
-                                    nn.Tanh(),
-                                    )
-        self.value = nn.Sequential(
-                                    nn.Linear(n_features, layer1_count),
-                                    nn.ELU(),
-                                    nn.Linear(layer1_count, layer2_count),
-                                    nn.ELU(),
-                                    nn.Linear(layer2_count, 1),
-                                    )
+        # self.policy = nn.Sequential(
+        #                             nn.Linear(n_features, layer1_count),
+        #                             nn.ELU(),
+        #                             nn.Linear(layer1_count, layer2_count),
+        #                             nn.ELU(),
+        #                             nn.Linear(layer2_count, n_actions),
+        #                             nn.Tanh(),
+        #                             )
+        # self.value = nn.Sequential(
+        #                             nn.Linear(n_features, layer1_count),
+        #                             nn.ELU(),
+        #                             nn.Linear(layer1_count, layer2_count),
+        #                             nn.ELU(),
+        #                             nn.Linear(layer2_count, 1),
+        #                             )
 
     def forward(self, x):
         s1 = torch.cat((self.shared1(x), x), dim=-1)
-        # s2 = torch.cat((self.shared2(s1), x), dim=-1)
-        v1 = torch.cat((self.value1(s1) , x), dim=-1)
+        s2 = torch.cat((self.shared2(s1), x), dim=-1)
+        v1 = torch.cat((self.value1(s2) , x), dim=-1)
         v2 = self.value2(v1) 
-        p1 = torch.cat((self.policy1(s1), x), dim=-1)
+        p1 = torch.cat((self.policy1(s2), x), dim=-1)
         p2 = self.policy2(p1)        
         # p = self.policy(x)
         # v = self.value(x)
@@ -116,7 +124,12 @@ agent_optim = optim.Adam(Agent.parameters(), lr=3e-4)
 #%%
                           
 mse_loss = torch.nn.MSELoss()
-env = CartPole(num_envs = num_envs, buf_horizon=horizon, gamma=gamma, rand_reset=True)
+# env = CartPole(num_envs = num_envs, buf_horizon=horizon, gamma=gamma, rand_reset=True)
+env = CartPole_4P(num_envs = num_envs, buf_horizon=horizon, gamma=gamma, rand_reset=True)
+replay_buffer = Buffer(env.buffer_hor, num_envs, env.num_actions, env.num_states, gamma)
+env.register_buffer(replay_buffer)
+
+
 log_probs = torch.zeros((num_envs, horizon))
 log_probs_old = torch.zeros((num_envs, horizon)).detach()
 env.render_init()
@@ -132,101 +145,95 @@ for epoch in range(num_epochs):
     actor_loss_list = []
     critic_loss_list = []
     
-    # for i in range(1):
-    for i in range(num_q_holds):
-        # s1, a1, r1, s2, d2 = env.buffer.get_SARS() 
-        
-        for _ in range(1):
-        # for _ in range(minibatch_steps):
-            # s1, a1, r1, s2, d2, log_probs_old, returns = env.buffer.get_SARS_minibatch(minibatch_size) 
-            s1, a1, r1, s2, d2, log_probs_old, returns = env.buffer.get_SARS()
 
-        
-            [vals_s1, probs_s1] = Agent(s1)
-            
-            
-            # action_pd_s1 = torch.distributions.Normal(probs_s1[:,:,0], probs_s1[:,:,1])
-            action_pd_s1 = torch.distributions.Normal(probs_s1[:,:,0], 0.1*torch.ones_like(probs_s1[:,:,0].detach()))
-            
+    for _ in range(1):
+    # for _ in range(minibatch_steps):
+        # s1, a1, r1, s2, d2, log_probs_old, returns = env.buffer.get_SARS_minibatch(minibatch_size) 
+        s1, a1, r1, s2, d2, log_probs_old, returns = replay_buffer.get_SARS()
 
-            # td_error = returns - vals_s1.squeeze(-1)
-            advantage = returns - vals_s1.squeeze(-1)
-            
-
-            # normalize advantage... (Doesn't Seem to work)
-            # advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
-            
-            
-            log_probs = action_pd_s1.log_prob(a1)
-            ratio = torch.exp(log_probs - log_probs_old)
-            
-
-            entropy_coff = entropy_coff_inital * (1-(epoch/num_epochs))
-            # entropy_loss = -action_pd_s1.entropy().mean() * entropy_coff
-            entropy_loss = -entropy_coff*torch.mean(-log_probs)
     
-            policy_loss_1 = advantage.detach() * ratio
-            policy_loss_2 = advantage.detach() * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
-            policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean() 
-            
-            value_loss = mse_loss(vals_s1.squeeze(-1), returns)
-            
-            total_loss = policy_loss + value_loss*0.2 + entropy_loss
-            
-            agent_optim.zero_grad()
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(Agent.parameters(), 0.5) #Max Grad Norm
-            agent_optim.step()
+        [vals_s1, probs_s1] = Agent(s1)
+        
+        
+        # action_pd_s1 = torch.distributions.Normal(probs_s1[:,:,0], probs_s1[:,:,1])
+        action_pd_s1 = torch.distributions.Normal(probs_s1[:,:,0], 0.1*torch.ones_like(probs_s1[:,:,0].detach()))
+        
 
-            
-            actor_loss_list.append(policy_loss.detach().cpu().numpy())
-            critic_loss_list.append(value_loss.detach().cpu().numpy())
-            
-            
+        # td_error = returns - vals_s1.squeeze(-1)
+        advantage = returns - vals_s1.squeeze(-1)
+        
 
-            
-            for name, param in Agent.named_parameters():
-                if( torch.any(torch.isnan(param)) ):
-                    print(name)
-                    print(param)
-                    BREAKPOINTBULLSHIT
+        # normalize advantage... (Doesn't Seem to work)
+        # advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
+        
+        
+        log_probs = action_pd_s1.log_prob(a1)
+        ratio = torch.exp(log_probs - log_probs_old)
+        
 
-                
-            
-            # print('---')
-            # print('s1')
-            # print(s1)
-            # print('a1')
-            # print(a1)
-            # print('r1')
-            # print(r1)
-            # print('s2')
-            # print(s2)
-            # print('d2')
-            # print(d2)
-            # print('advantage')
-            # print(advantage)
-            # print('RETURNS')
-            # print(returns)
-            
+        entropy_coff = entropy_coff_inital * (1-(epoch/num_epochs))
+        # entropy_loss = -action_pd_s1.entropy().mean() * entropy_coff
+        entropy_loss = -entropy_coff*torch.mean(-log_probs)
+
+        policy_loss_1 = advantage.detach() * ratio
+        policy_loss_2 = advantage.detach() * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
+        policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean() 
+        
+        value_loss = mse_loss(vals_s1.squeeze(-1), returns)
+        
+        total_loss = policy_loss + value_loss*0.2 + entropy_loss
+        
+        agent_optim.zero_grad()
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(Agent.parameters(), 0.5) #Max Grad Norm
+        agent_optim.step()
+
+        
+        actor_loss_list.append(policy_loss.detach().cpu().numpy())
+        critic_loss_list.append(value_loss.detach().cpu().numpy())
+        
+        
+
+        
+        for name, param in Agent.named_parameters():
+            if( torch.any(torch.isnan(param)) ):
+                print(name)
+                print(param)
+                BREAKPOINTBULLSHIT
+
             
         
-        with torch.no_grad():
-            env.render_init()
-            for _ in range(take_n_actions):
-                env.render(0)
-                
-                s1, a1, r1, s2, d2, log_probs_old, returns = env.buffer.get_SARS()
-                [vals, probs] = Agent(s2)
-                newest_probs = probs[:,0,0].view(-1,1)
-                action_pd = torch.distributions.Normal(newest_probs, 0.1*torch.ones_like(newest_probs))
-                next_actions = action_pd.sample()
-                log_probs_sample = action_pd.log_prob(next_actions)
-                env.step(next_actions, log_probs_sample, Agent)
-                
-                
-                
-                
+        # print('---')
+        # print('s1')
+        # print(s1)
+        # print('a1')
+        # print(a1)
+        # print('r1')
+        # print(r1)
+        # print('s2')
+        # print(s2)
+        # print('d2')
+        # print(d2)
+        # print('advantage')
+        # print(advantage)
+        # print('RETURNS')
+        # print(returns)
+        
+        
+    
+    with torch.no_grad():
+        env.render_init()
+        for _ in range(take_n_actions):
+            env.render(0)
+            
+            s1, a1, r1, s2, d2, log_probs_old, returns = replay_buffer.get_SARS()
+            [vals, probs] = Agent(s2)
+            newest_probs = probs[:,0,0].view(-1,1)
+            action_pd = torch.distributions.Normal(newest_probs, 0.1*torch.ones_like(newest_probs))
+            next_actions = action_pd.sample()
+            log_probs_sample = action_pd.log_prob(next_actions)
+            env.step(next_actions, log_probs_sample, Agent)
+        
             
 
     print(epoch)
@@ -240,7 +247,7 @@ for epoch in range(num_epochs):
     
     # print(Qvals.reshape([siz,siz]))
     
-torch.save(Agent.state_dict(), "D2RL_Save.pth")
+torch.save(Agent.state_dict(), "model_name.pth")
 
 
 #%%
@@ -248,7 +255,7 @@ import time
 num_envs=2
 test_env = CartPole(num_envs = num_envs, buf_horizon=10, rand_reset=True)
 test_env.render_init()
-Agent.load_state_dict(torch.load("D2RL_Save.pth"))
+Agent.load_state_dict(torch.load("model_name.pth"))
 #%%
 env_ids = torch.arange(num_envs)
 test_env.reset_idx(env_ids)
@@ -257,11 +264,12 @@ test_env.state[0,:] = 0
 test_env.state[0,2] = 10*torch.pi/180.0
 #%%
 
-view_len = 5000
+view_len = 1000
 env_view_id = 0
 for i in range(view_len):
+    start_time = time.perf_counter()
     test_env.render(env_view_id)
-    s1, a1, r1, s2, d2, log_probs_old, returns = test_env.buffer.get_SARS() 
+    s1, a1, r1, s2, d2, log_probs_old, returns = replay_buffer.get_SARS() 
     
     # probs = Actor(s2)
     [vals, probs] = Agent(s2)
@@ -274,10 +282,76 @@ for i in range(view_len):
     log_probs = action_pd.log_prob(next_actions)
     
     test_env.step(next_actions, log_probs, Agent)
-    print(test_env.reward[0])
-    
+
+    time_diff = time.perf_counter() - start_time
+    print('S{} : {}s'.format(i, time_diff))
     # print(next_actions[0,0])
     # if(d2[0,0]):
     #     print('RESET')
 
-   
+
+#%%
+
+input_names = ["state_scaled"]
+output_names = ["value"] + ["mean"]
+dummy_input = torch.randn([1, 5])
+torch.onnx.export(Agent, dummy_input, "cartpole_256_128_64.onnx", verbose=True, input_names=input_names, output_names=output_names)
+
+
+#%%
+
+test_input = torch.tensor([0.86, 0.486, -0.476, 0.0579, 0.400]).view(1,-1)
+[test_v, test_p] = Agent(test_input)
+
+print('{} : {}'.format(test_v, test_p))
+
+#%%
+# STM32 Inference
+
+import serial
+import struct
+
+port = "COM9"
+baudrate = 256000 
+timeout = 1
+view_len = 1000
+env_view_id = 0
+
+time_accumulator = []
+with serial.Serial(port, baudrate, timeout=timeout) as ser:
+    for i in range(view_len):
+        start_time = time.perf_counter()
+        test_env.render(env_view_id)
+        s1, a1, r1, s2, d2, log_probs_old, returns = replay_buffer.get_SARS() 
+        
+       
+        packet = bytearray()
+        for d in s2[0,0,:]:
+            for b in struct.pack("f", d):
+                packet.append(b)
+                
+        ser.write(packet)
+        ser.flush()
+       
+        x = ser.read(8)
+        val = struct.unpack('f', x[0:4])[0]
+        act = struct.unpack('f', x[4:8])[0]
+        
+        
+        a = test_env.joy.get_axis()
+        next_actions = torch.ones([num_envs,1])*act + a[0]
+        
+        log_probs = action_pd.log_prob(next_actions)
+        
+        test_env.step(next_actions, log_probs, Agent)
+        
+        time_diff = time.perf_counter() - start_time
+        time_accumulator.append(time_diff)
+        print('S{} : {}s'.format(i, time_diff))
+
+time_accum = torch.tensor(time_accumulator)
+mean_time = time_accum.mean()
+print("Average Loop Time : {}s. ".format(mean_time))
+print("Average Loop Freq : {}Hz. ".format(1/mean_time))
+
+

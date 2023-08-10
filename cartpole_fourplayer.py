@@ -13,7 +13,6 @@ from joystick import Joystick
 import time
 
 
-
 #%%
 torch.set_default_device("cuda")
 
@@ -30,27 +29,28 @@ def RandTensorRange(size, min_val, max_val):
     rt = torch.rand(size)*tensor_range + min_val
     return rt
 
-    
-class CartPole():
+class CartPole_4P():
     def __init__(self, num_envs=2, buf_horizon=10, gamma=0.9, rand_reset=False):
         self.dt = 0.01
         self.gravity = 9.81
         self.num_envs = num_envs
         self.buffer_hor = buf_horizon
-        self.num_actions = 1
+        self.num_players = 4
+        self.num_actions = 1*self.num_players
         self.num_states = 5
+
         self.rand_reset = rand_reset
         
         # ele 0 : Position
         # ele 1 : Velocity
         # ele 1 : Theta
         # ele 1 : Omega
-        self.state = torch.zeros( (self.num_envs, self.num_states) ) 
-        self.position = self.state[:,0].view(-1,1)
-        self.velocity = self.state[:,1].view(-1,1)
-        self.theta = self.state[:,2].view(-1,1)
-        self.omega = self.state[:,3].view(-1,1)
-        self.target = self.state[:,4].view(-1,1)
+        self.state = torch.zeros( (self.num_envs, self.num_players, self.num_states) ) 
+        self.position = self.state[:,:,0].view(self.num_envs, self.num_players, 1)
+        self.velocity = self.state[:,:,1].view(self.num_envs, self.num_players, 1)
+        self.theta = self.state[:,:,2].view(self.num_envs, self.num_players, 1)
+        self.omega = self.state[:,:,3].view(self.num_envs, self.num_players, 1)
+        self.target = self.state[:,:,4].view(self.num_envs, self.num_players, 1)
         
         # self.kinematics_integrator = 'euler'
         self.kinematics_integrator = 'semi-euler'
@@ -58,11 +58,11 @@ class CartPole():
         # Cart Variables
         self.min_cart_mass = 1.0
         self.max_cart_mass = 1.0
-        self.cart_mass = RandTensorRange( (self.num_envs, 1), self.min_cart_mass, self.max_cart_mass)
+        self.cart_mass = RandTensorRange( (self.num_envs, 1, 1), self.min_cart_mass, self.max_cart_mass)
         # Pole Variables
         self.min_pole_mass = 0.1
         self.max_pole_mass = 0.1
-        self.pole_mass = RandTensorRange( (self.num_envs, 1), self.min_pole_mass, self.max_pole_mass)
+        self.pole_mass = RandTensorRange( (self.num_envs, self.num_players, 1), self.min_pole_mass, self.max_pole_mass)
         self.length = 0.5 # Half Length
         self.polemass_precalc = self.pole_mass*self.length
         # self.Inertia = (1/3)*self.pole_mass*(self.length*2)**2
@@ -105,11 +105,11 @@ class CartPole():
         with torch.no_grad():
             
                 
-            force = self.force_scale * actions
+            force = self.force_scale * actions.view(self.num_envs, self.num_players, 1)
             
             self.costheta = torch.cos(self.theta)
             self.sintheta = torch.sin(self.theta)
-                
+            
             tmp = (force + self.polemass_precalc*self.omega**2 * self.sintheta)/self.total_mass
             alpha = (self.gravity * self.sintheta - self.costheta*tmp) / (self.length * (4.0/3.0 - self.pole_mass*self.costheta ** 2/self.total_mass))
             # alpha += -self.omega*0.1
@@ -118,8 +118,10 @@ class CartPole():
             # print(self.theta[0])
             # print(alpha)
             
-            
-            self.buffer.update1(self.state*self.state_scaler, actions, log_probs)
+            buf_states1 = self.state*self.state_scaler.view(1,1,self.num_states)
+            buf_states1 = buf_states1.view(self.num_envs, self.num_states*self.num_players)
+
+            self.buffer.update1(buf_states1, actions, log_probs)
             
             if self.kinematics_integrator == 'euler':
                 dxdt = torch.cat( (self.velocity.view((-1,1)), accel, self.omega.view((-1,1)), alpha, torch.zeros_like(alpha)), dim=1)
@@ -134,27 +136,41 @@ class CartPole():
             
             self.out_of_bounds = (torch.where(torch.abs(self.position) > self.x_threshold, 1, 0)).squeeze()
             self.extream_angle = (torch.where(torch.abs(self.theta)  > self.theta_threshold_radians, 1, 0)).squeeze()
-            self.done = (self.out_of_bounds | self.extream_angle).view(-1,1)
+            self.done = (self.out_of_bounds | self.extream_angle)
             
                     
             self.reward_angle = (1.0-torch.abs(self.theta))**2.0
             self.reward_dist =  1.0-((self.position - self.target)/(self.x_threshold))**2.0
             self.reward = (self.reward_angle + self.reward_dist)/2.0
             self.reward = torch.where(self.done==1, -1.0, 1.0-torch.abs(actions))
+            self.reward_summed = self.reward.sum(dim=1)
+            self.done_summed = self.done.sum(dim=1)
             
             
-            self.reached_goal = ((self.position - self.target)**2 < 0.075) & (torch.abs(self.velocity) < 0.1)
-            env_ids = self.reached_goal.view(-1).nonzero(as_tuple=False).squeeze(-1)
-            if len(env_ids) > 0:
-                self.reset_goal(env_ids)
-                self.reward[env_ids] = 100.0
+            # Need to think about how to fix this in 4 player mode... 
+            
+            # self.reached_goal = ((self.position - self.target)**2 < 0.075) & (torch.abs(self.velocity) < 0.1)
+            # env_ids = self.reached_goal.view(-1).nonzero(as_tuple=False).squeeze(-1)
+            # if len(env_ids) > 0:
+                # self.reset_goal(env_ids)
+                # self.reward_summed[env_ids] = 100.0
                 
                 
-            [vals, probs] = ValueNet(self.state*self.state_scaler)
-            self.buffer.update2(self.reward, self.state*self.state_scaler, self.done, vals)
+                
+            
+            
+            buf_states2 = self.state*self.state_scaler.view(1,1,self.num_states)
+            buf_states2 = buf_states2.view(self.num_envs, self.num_states*self.num_players)
+            
+            [vals, probs] = ValueNet(buf_states2)
+            
+            print('wut')
+            print(buf_states2.shape)
+            print(vals.shape)
+            self.buffer.update2(self.reward_summed, buf_states2, self.done_summed, vals)
     
             
-            env_ids = self.done.view(-1).nonzero(as_tuple=False).squeeze(-1)
+            env_ids = self.done_summed.view(-1).nonzero(as_tuple=False).squeeze(-1)
     
             if len(env_ids) > 0:
                 self.reset_idx(env_ids)
@@ -167,17 +183,17 @@ class CartPole():
     def reset_idx(self, env_ids):
         
         if(self.rand_reset):
-            self.position[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_pos_range, self.rand_pos_range)
-            self.velocity[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_vel_range, self.rand_vel_range)
-            self.theta[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_theta_range, self.rand_theta_range)
-            self.omega[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_omega_range, self.rand_omega_range)   
-            self.target[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_target_range, self.rand_target_range)   
+            self.position[env_ids, ...] = RandTensorRange( (len(env_ids), self.num_players, 1), -self.rand_pos_range, self.rand_pos_range)
+            self.velocity[env_ids, ...] = RandTensorRange( (len(env_ids), self.num_players, 1), -self.rand_vel_range, self.rand_vel_range)
+            self.theta[env_ids, ...] = RandTensorRange( (len(env_ids), self.num_players, 1), -self.rand_theta_range, self.rand_theta_range)
+            self.omega[env_ids, ...] = RandTensorRange( (len(env_ids), self.num_players, 1), -self.rand_omega_range, self.rand_omega_range)   
+            self.target[env_ids, ...] = RandTensorRange( (len(env_ids), self.num_players, 1), -self.rand_target_range, self.rand_target_range)   
         else:
-            self.position[env_ids, :] = torch.zeros( (len(env_ids), 1))
-            self.velocity[env_ids, :] = torch.zeros( (len(env_ids), 1))
-            self.theta[env_ids, :] = torch.zeros( (len(env_ids), 1))
-            self.omega[env_ids, :] = torch.zeros( (len(env_ids), 1))   
-            self.target[env_ids, :] = torch.zeros( (len(env_ids), 1))   
+            self.position[env_ids, :] = torch.zeros( (len(env_ids), self.num_players, 1))
+            self.velocity[env_ids, :] = torch.zeros( (len(env_ids), self.num_players, 1))
+            self.theta[env_ids, :] = torch.zeros( (len(env_ids), self.num_players, 1))
+            self.omega[env_ids, :] = torch.zeros( (len(env_ids), self.num_players, 1))   
+            self.target[env_ids, :] = torch.zeros( (len(env_ids), self.num_players, 1))   
             
     def reset_goal(self, env_ids):
         self.target[env_ids, :] = RandTensorRange( (len(env_ids), 1), -self.rand_target_range, self.rand_target_range)
@@ -230,15 +246,17 @@ class CartPole():
         self.pos_scale = (self.window_width-self.cart_width)/2/self.x_threshold
         
     def render(self, env_id):
-        position = self.position[env_id].detach().cpu().numpy() * self.pos_scale
-        angle = -(self.theta[env_id].detach().cpu().numpy() + torch.pi)
-        goal_pos = self.target[env_id].detach().cpu().numpy() * self.pos_scale
+        position = self.position[env_id, 0].detach().cpu().numpy() * self.pos_scale
+        angle = -(self.theta[env_id, 0].detach().cpu().numpy() + torch.pi)
+        goal_pos = self.target[env_id, 0].detach().cpu().numpy() * self.pos_scale
         
         # clear the screen every time before drawing new objects  
         self.window.fill(BLACK)  
 
         new_cart = self.cart_image
-        cart_rect = new_cart.get_rect()  
+        cart_rect = new_cart.get_rect()
+        print(position.shape)
+
         cart_rect.center = (position + self.screen_center[0], self.screen_center[1])
         self.window.blit(new_cart, cart_rect)
                 
@@ -266,34 +284,64 @@ class CartPole():
 
 
 # #%%
-# cp = CartPole(num_envs = 2, buf_horizon=6, gamma=0.9, rand_reset=True)
+# from buffer import Buffer
+# cp = CartPole_4P(num_envs = 2, buf_horizon=6, gamma=0.9, rand_reset=True)
+# replay_buffer = Buffer(cp.buffer_hor, cp.num_envs, cp.num_actions, cp.num_states * cp.num_players, 0.99)
+# cp.register_buffer(replay_buffer)
+
 # cp.render_init()
 
 # import torch.nn as nn
-# class ValueNet(torch.nn.Module):
+# class Policy(torch.nn.Module):
 #     def __init__(self):
 #         super().__init__()
 #         # define actor and critic networks
         
-#         n_features = 5
-#         n_actions = 1
-        
-#         layers = [nn.Linear(n_features, 128),
-#                   nn.LeakyReLU(),
-#                   nn.Linear(128, 128),  
-#                   nn.LeakyReLU(),
-#                   nn.Linear(128, 64),  
-#                   nn.LeakyReLU(),
-#                   nn.Linear(64, n_actions),  
-#                  ]
-#         self.layers = nn.Sequential(*layers)
+#         n_features = 20
+#         n_actions = 4
+#         layer1_count = 256
+#         layer2_count = 128
+#         layer3_count = 64
 
+        
+#         self.shared1 = nn.Sequential(
+#                                     nn.Linear(n_features, layer1_count),
+#                                     nn.ELU()
+#                                     )
+        
+#         self.shared2 = nn.Sequential(
+#                                     nn.Linear(layer1_count+n_features, layer2_count),
+#                                     nn.ELU()
+#                                     )
+        
+        
+#         self.policy1 = nn.Sequential(
+#                                     nn.Linear(layer2_count+n_features, layer3_count),
+#                                     nn.ELU()
+#                                     )
+#         self.policy2 = nn.Sequential(
+#                                     nn.Linear(layer3_count+n_features, n_actions),
+#                                     nn.Tanh(),
+#                                     )
+        
+#         self.value1 = nn.Sequential(
+#                                     nn.Linear(layer2_count+n_features, layer3_count),
+#                                     nn.ELU()
+#                                     )
+#         self.value2 = nn.Sequential(
+#                                     nn.Linear(layer3_count+n_features, 1),
+#                                     )
 
 #     def forward(self, x):
-#         values = self.layers(x)  # shape: [n_envs,]
-#         return (values)
+#         s1 = torch.cat((self.shared1(x), x), dim=-1)
+#         s2 = torch.cat((self.shared2(s1), x), dim=-1)
+#         v1 = torch.cat((self.value1(s2) , x), dim=-1)
+#         v2 = self.value2(v1) 
+#         p1 = torch.cat((self.policy1(s2), x), dim=-1)
+#         p2 = self.policy2(p1)        
+#         return v2, p2
 
-# critic = ValueNet()
+# policy = Policy()
 # #%%
 
 # pos_log = []
@@ -312,7 +360,7 @@ class CartPole():
 # cp.theta[...] = 1*torch.pi/180.0
 # #%%
 
-# for _ in range(1):
+# for _ in range(10):
     
 #     start_time = time.time()
 #     pos_log.append(cp.state[env_2_watch, 0].detach().cpu().numpy())
@@ -324,9 +372,9 @@ class CartPole():
 #     cp.render(env_2_watch)
 #     a = cp.joy.get_axis()
 #     # actions = torch.ones((cp.num_envs,1))*a[0]
-#     actions = torch.ones((cp.num_envs, 1))*0.5
-#     log_probs = torch.ones((cp.num_envs, 1))
-#     cp.step(actions, log_probs, critic)
+#     actions = torch.ones((cp.num_envs, cp.num_actions))*0.5
+#     log_probs = torch.ones((cp.num_envs, cp.num_actions))
+#     cp.step(actions, log_probs, policy)
 #     reward_log.append(cp.reward[env_2_watch].detach().cpu().numpy())
 #     # print(cp.reward[0,...])
 #     elapsed_time = time.time() - start_time
@@ -334,17 +382,17 @@ class CartPole():
 #     # print('FPS : {}'.format(cp.num_envs/elapsed_time))
 
     
-#     [s1,a1,r1,s2,d, log_probs_old] = cp.buffer.get_SARS()
+#     [s1,a1,r1,s2,d, log_probs_old, returns] = cp.buffer.get_SARS()
 #     # print('s1')
-#     # print(s1)
+#     # print(s1[0, : , 0])
 #     # print('s2')
-#     # print(s2)
+#     # print(s2[0, :, 0])
 #     # print('a1')
 #     # print(a1)
 #     # print('r')
 #     # print(r1)
-#     print('d')
-#     print(d)
+#     # print('d')
+#     # print(d)
 #     # print('advantage')
 #     # print(cp.buffer.rewards_to_go)
 
@@ -371,7 +419,7 @@ class CartPole():
 
 # #%%
 
-# [s1,a1,r1,s2,d, lp_old] = cp.buffer.get_SARS()
+# [s1,a1,r1,s2,d, lp_old, returns] = cp.buffer.get_SARS()
 # print('s1')
 # print(s1)
 # print('s2')
