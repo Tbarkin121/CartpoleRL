@@ -46,7 +46,7 @@ class Policy(torch.nn.Module):
         n_actions = 4
         layer1_count = 256
         layer2_count = 128
-        layer3_count = 64
+        layer3_count = 4
 
         
         self.shared1 = nn.Sequential(
@@ -64,7 +64,7 @@ class Policy(torch.nn.Module):
                                     nn.ELU()
                                     )
         self.policy2 = nn.Sequential(
-                                    nn.Linear(layer3_count+n_features, n_actions),
+                                    nn.Linear(layer3_count, n_actions),
                                     nn.Tanh(),
                                     )
         
@@ -73,7 +73,7 @@ class Policy(torch.nn.Module):
                                     nn.ELU()
                                     )
         self.value2 = nn.Sequential(
-                                    nn.Linear(layer3_count+n_features, 1),
+                                    nn.Linear(layer3_count, 1),
                                     )
         
         # self.policy = nn.Sequential(
@@ -95,9 +95,11 @@ class Policy(torch.nn.Module):
     def forward(self, x):
         s1 = torch.cat((self.shared1(x), x), dim=-1)
         s2 = torch.cat((self.shared2(s1), x), dim=-1)
-        v1 = torch.cat((self.value1(s2) , x), dim=-1)
+        # v1 = torch.cat((self.value1(s2) , x), dim=-1)
+        v1 = self.value1(s2)
         v2 = self.value2(v1) 
-        p1 = torch.cat((self.policy1(s2), x), dim=-1)
+        # p1 = torch.cat((self.policy1(s2), x), dim=-1)
+        p1 = self.policy1(s2)
         p2 = self.policy2(p1)        
         # p = self.policy(x)
         # v = self.value(x)
@@ -358,7 +360,7 @@ print("Average Loop Freq : {}Hz. ".format(1/mean_time))
 #%%
 import matplotlib.pyplot as plt
 
-data = Agent.shared1[0].weight.sort(dim=1)[0].cpu().detach().numpy()
+data = Agent.policy2[0].weight.sort(dim=1)[0].cpu().detach().numpy()
 # plt.plot(data)
 # plt.show()
 # for name, param in Agent.named_parameters():
@@ -367,4 +369,6 @@ data = Agent.shared1[0].weight.sort(dim=1)[0].cpu().detach().numpy()
 #         print(param)
 #         BREAKPOINTBULLSHIT
         
-        
+#%% Labotomy
+Agent.policy2[0].weight.requires_grad=False
+Agent.policy2[0].weight[Agent.policy2[0].weight  < 0.1] = 0

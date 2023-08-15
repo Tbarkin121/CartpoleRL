@@ -12,7 +12,7 @@ pipe.enable_model_cpu_offload()
 pipe.enable_vae_slicing()
 
 # generate
-prompt = "Cats djing. Laser Lights!"
+prompt = "Cats djing."
 video_frames = pipe(prompt, num_inference_steps=200, num_frames=80, guidance_scale=16).frames
 
 # convent to video1

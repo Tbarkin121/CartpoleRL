@@ -9,8 +9,8 @@ pipe.enable_vae_slicing()
 pipe.enable_vae_tiling()
 
 #%%
-prompt = "Cats djing. Laser Lights!"
-video_frames = pipe(prompt, num_inference_steps=00, height=480, width=720, num_frames=80, guidance_scale=16).frames
+prompt = "Cats djing."
+video_frames = pipe(prompt, num_inference_steps=20, height=480, width=720, num_frames=80, guidance_scale=16).frames
 video_path = export_to_video(video_frames, output_video_path="C:\\Users\\Plutonium\\Desktop\\vid2.mp4")
 
 # height=320, width=576,
